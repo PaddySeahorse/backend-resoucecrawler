@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 
 const app = express();
 app.use(express.json());
@@ -45,17 +46,16 @@ async function resolveShortUrl(shortUrl) {
 // 提取图片和视频链接
 async function scrapeMedia(fullUrl) {
   const browser = await puppeteer.launch({
-    headless: true,
+    headless: chromium.headless,
     args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
+      ...chromium.args,
       '--disable-dev-shm-usage',
       '--disable-gpu',
       '--no-zygote',
-      '--single-process' // 优化内存
+      '--single-process'
     ],
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-    ignoreDefaultArgs: ['--disable-extensions'] // 避免默认参数冲突
+    executablePath: await chromium.executablePath(),
+    ignoreDefaultArgs: ['--disable-extensions']
   });
 
   try {
