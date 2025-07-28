@@ -1,6 +1,6 @@
 const express = require('express');
 const axios = require('axios');
-const puppeteer = require('puppeteer'); // 替换为 puppeteer
+const puppeteer = require('puppeteer');
 
 const app = express();
 app.use(express.json());
@@ -29,53 +29,74 @@ app.get('/parse_xiaohongshu', async (req, res) => {
 
 // 解析短链接
 async function resolveShortUrl(shortUrl) {
-  const response = await axios.get(shortUrl, {
-    maxRedirects: 5,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-  });
-  return response.request.res.responseUrl;
+  try {
+    const response = await axios.get(shortUrl, {
+      maxRedirects: 5,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
+    return response.request.res.responseUrl;
+  } catch (error) {
+    throw new Error(`解析短链接失败: ${error.message}`);
+  }
 }
 
 // 提取图片和视频链接
 async function scrapeMedia(fullUrl) {
   const browser = await puppeteer.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'] // Vercel 必需的参数
-  });
-  const page = await browser.newPage();
-  await page.setExtraHTTPHeaders({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-  });
-  await page.goto(fullUrl, { waitUntil: 'networkidle2' });
-
-  const mediaLinks = { images: [], videos: [] };
-  const images = await page.$$eval('img', imgs =>
-    imgs.map(img => img.src).filter(src => src.match(/\.(jpg|png|jpeg)$/i))
-  );
-  mediaLinks.images = images;
-
-  const videos = await page.$$eval('video', vids =>
-    vids.map(vid => vid.src).filter(src => src)
-  );
-  mediaLinks.videos = videos;
-
-  // 捕获动态 API 请求中的媒体 URL
-  page.on('response', async response => {
-    if (response.url().includes('api') && response.url().includes('json')) {
-      try {
-        const data = await response.json();
-        if (data?.video?.url) {
-          mediaLinks.videos.push(data.video.url);
-        }
-      } catch {}
-    }
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage', // 优化内存使用
+      '--disable-gpu', // 禁用 GPU
+      '--no-zygote' // 减少资源占用
+    ],
+    // 动态设置 Chromium 路径（Vercel 环境）
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
   });
 
-  await page.waitForTimeout(3000); // 等待动态内容加载
-  await browser.close();
-  return mediaLinks;
+  try {
+    const page = await browser.newPage();
+    // 随机化 User-Agent
+    const userAgents = [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Safari/605.1.15'
+    ];
+    const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
+    await page.setExtraHTTPHeaders({ 'User-Agent': randomUA });
+
+    await page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); // 使用 domcontentloaded 加快加载
+
+    const mediaLinks = { images: [], videos: [] };
+    const images = await page.$$eval('img', imgs =>
+      imgs.map(img => img.src).filter(src => src && src.match(/\.(jpg|png|jpeg)$/i))
+    );
+    mediaLinks.images = images;
+
+    const videos = await page.$$eval('video', vids =>
+      vids.map(vid => vid.src).filter(src => src)
+    );
+    mediaLinks.videos = videos;
+
+    // 捕获动态 API 请求中的媒体 URL
+    page.on('response', async response => {
+      if (response.url().includes('api') && response.url().includes('json')) {
+        try {
+          const data = await response.json();
+          if (data?.video?.url) {
+            mediaLinks.videos.push(data.video.url);
+          }
+        } catch {}
+      }
+    });
+
+    await page.waitForTimeout(5000); // 等待动态内容加载
+    return mediaLinks;
+  } finally {
+    await browser.close();
+  }
 }
 
 module.exports = app;
