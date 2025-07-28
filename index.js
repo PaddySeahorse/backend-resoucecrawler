@@ -49,17 +49,17 @@ async function scrapeMedia(fullUrl) {
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage', // 优化内存使用
-      '--disable-gpu', // 禁用 GPU
-      '--no-zygote' // 减少资源占用
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-zygote',
+      '--single-process' // 优化内存
     ],
-    // 动态设置 Chromium 路径（Vercel 环境）
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    ignoreDefaultArgs: ['--disable-extensions'] // 避免默认参数冲突
   });
 
   try {
     const page = await browser.newPage();
-    // 随机化 User-Agent
     const userAgents = [
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
       'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Safari/605.1.15'
@@ -67,7 +67,7 @@ async function scrapeMedia(fullUrl) {
     const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
     await page.setExtraHTTPHeaders({ 'User-Agent': randomUA });
 
-    await page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); // 使用 domcontentloaded 加快加载
+    await page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
     const mediaLinks = { images: [], videos: [] };
     const images = await page.$$eval('img', imgs =>
@@ -80,7 +80,6 @@ async function scrapeMedia(fullUrl) {
     );
     mediaLinks.videos = videos;
 
-    // 捕获动态 API 请求中的媒体 URL
     page.on('response', async response => {
       if (response.url().includes('api') && response.url().includes('json')) {
         try {
@@ -92,7 +91,7 @@ async function scrapeMedia(fullUrl) {
       }
     });
 
-    await page.waitForTimeout(5000); // 等待动态内容加载
+    await page.waitForTimeout(5000);
     return mediaLinks;
   } finally {
     await browser.close();
