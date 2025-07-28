@@ -1,6 +1,6 @@
 const express = require('express');
 const axios = require('axios');
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('puppeteer'); // 替换为 puppeteer
 
 const app = express();
 app.use(express.json());
@@ -9,21 +9,21 @@ app.use(express.json());
 app.get('/parse_xiaohongshu', async (req, res) => {
   const { url } = req.query;
   if (!url || !url.includes('xhslink.com')) {
-    return res.status(400).json({ error: 'Invalid Xiaohongshu short URL' });
+    return res.status(400).json({ error: '无效的小红书短链接' });
   }
 
   try {
     // 解析短链接
     const fullUrl = await resolveShortUrl(url);
     if (!fullUrl.includes('xiaohongshu.com')) {
-      return res.status(400).json({ error: 'Invalid resolved URL' });
+      return res.status(400).json({ error: '解析后的 URL 无效' });
     }
 
     // 提取媒体链接
     const mediaLinks = await scrapeMedia(fullUrl);
     res.json({ status: 'success', data: { resolvedUrl: fullUrl, media: mediaLinks } });
   } catch (error) {
-    res.status(500).json({ error: `Failed to process: ${error.message}` });
+    res.status(500).json({ error: `处理失败: ${error.message}` });
   }
 });
 
@@ -41,9 +41,8 @@ async function resolveShortUrl(shortUrl) {
 // 提取图片和视频链接
 async function scrapeMedia(fullUrl) {
   const browser = await puppeteer.launch({
-    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser',
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: ['--no-sandbox', '--disable-setuid-sandbox'] // Vercel 必需的参数
   });
   const page = await browser.newPage();
   await page.setExtraHTTPHeaders({
