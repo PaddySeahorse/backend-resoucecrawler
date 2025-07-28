@@ -4,7 +4,7 @@
   "dependencies": {
     "express": "^4.17.1",
     "axios": "^1.6.0",
-    "puppeteer-core": "^21.0.0"
+    "puppeteer": "^21.0.0" // 替换为 puppeteer
   },
   "engines": {
     "node": ">=14.0.0"
