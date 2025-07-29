@@ -5,7 +5,8 @@
     "express": "^4.17.1",
     "axios": "^1.6.0",
     "puppeteer-core": "^21.0.0",
-    "@sparticuz/chromium": "^123.0.0"
+    "@vercel/kv": "^0.2.0",
+    "p-queue": "^7.3.0"
   },
   "engines": {
     "node": ">=14.0.0"
