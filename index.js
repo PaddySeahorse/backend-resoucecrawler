@@ -1,34 +1,46 @@
 const express = require('express');
 const axios = require('axios');
 const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
+const { createClient } = require('@vercel/kv');
+const PQueue = require('p-queue');
 
 const app = express();
 app.use(express.json());
 
-// API 端点：解析小红书短链接并提取媒体
+const kv = createClient({
+  url: process.env.KV_REST_API_URL,
+  token: process.env.KV_REST_API_TOKEN
+});
+
+// 控制 Browserless 并发
+const queue = new PQueue({ concurrency: 1 });
+
 app.get('/parse_xiaohongshu', async (req, res) => {
   const { url } = req.query;
   if (!url || !url.includes('xhslink.com')) {
     return res.status(400).json({ error: '无效的小红书短链接' });
   }
 
+  const cacheKey = `xhs:${url}`;
+  const cached = await kv.get(cacheKey);
+  if (cached) {
+    return res.json(cached);
+  }
+
   try {
-    // 解析短链接
     const fullUrl = await resolveShortUrl(url);
     if (!fullUrl.includes('xiaohongshu.com')) {
       return res.status(400).json({ error: '解析后的 URL 无效' });
     }
-
-    // 提取媒体链接
-    const mediaLinks = await scrapeMedia(fullUrl);
-    res.json({ status: 'success', data: { resolvedUrl: fullUrl, media: mediaLinks } });
+    const mediaLinks = await queue.add(() => scrapeMedia(fullUrl));
+    const result = { status: 'success', data: { resolvedUrl: fullUrl, media: mediaLinks } };
+    await kv.set(cacheKey, result, { ex: 3600 }); // 缓存 1 小时
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: `处理失败: ${error.message}` });
   }
 });
 
-// 解析短链接
 async function resolveShortUrl(shortUrl) {
   try {
     const response = await axios.get(shortUrl, {
@@ -43,19 +55,9 @@ async function resolveShortUrl(shortUrl) {
   }
 }
 
-// 提取图片和视频链接
 async function scrapeMedia(fullUrl) {
-  const browser = await puppeteer.launch({
-    headless: chromium.headless,
-    args: [
-      ...chromium.args,
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process'
-    ],
-    executablePath: await chromium.executablePath(),
-    ignoreDefaultArgs: ['--disable-extensions']
+  const browser = await puppeteer.connect({
+    browserWSEndpoint: `wss://chrome.browserless.io?token=${process.env.BROWSERLESS_TOKEN}`
   });
 
   try {
@@ -67,7 +69,18 @@ async function scrapeMedia(fullUrl) {
     const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
     await page.setExtraHTTPHeaders({ 'User-Agent': randomUA });
 
-    await page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // 优化资源加载
+    await page.setRequestInterception(true);
+    page.on('request', request => {
+      if (['image', 'stylesheet', 'font'].includes(request.resourceType())) {
+        request.abort();
+      } else {
+        request.continue();
+      }
+    });
+
+    // 优化超时
+    await page.goto(fullUrl, { waitUntil: 'networkidle0', timeout: 10000 });
 
     const mediaLinks = { images: [], videos: [] };
     const images = await page.$$eval('img', imgs =>
@@ -91,7 +104,7 @@ async function scrapeMedia(fullUrl) {
       }
     });
 
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(1000);
     return mediaLinks;
   } finally {
     await browser.close();
