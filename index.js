@@ -52,9 +52,22 @@ app.get('/parse_xiaohongshu', async (req, res) => {
       return res.status(400).json({ error: '解析后的 URL 无效' });
     }
 
-    console.log('Scraping media from:', fullUrl);
-    const mediaLinks = await queue.add(() => scrapeMedia(fullUrl));
-    const result = { status: 'success', data: { resolvedUrl: fullUrl, media: mediaLinks } };
+    console.log('Attempting API fetch for:', fullUrl);
+    const mediaLinks = await fetchMediaViaApi(fullUrl);
+    if (mediaLinks) {
+      const result = { status: 'success', data: { resolvedUrl: fullUrl, media: mediaLinks } };
+      try {
+        console.log('Saving to cache:', cacheKey);
+        await kv.set(cacheKey, result, { ex: 3600 });
+      } catch (error) {
+        console.error('KV save error:', error.message);
+      }
+      return res.json(result);
+    }
+
+    console.log('Falling back to scraping:', fullUrl);
+    const scrapedMedia = await queue.add(() => scrapeMedia(fullUrl));
+    const result = { status: 'success', data: { resolvedUrl: fullUrl, media: scrapedMedia } };
     
     try {
       console.log('Saving to cache:', cacheKey);
@@ -83,6 +96,42 @@ async function resolveShortUrl(shortUrl) {
     return response.request.res.responseUrl;
   } catch (error) {
     throw new Error(`解析短链接失败: ${error.message}`);
+  }
+}
+
+async function fetchMediaViaApi(fullUrl) {
+  try {
+    const noteId = fullUrl.match(/explore\/([a-zA-Z0-9]+)/)?.[1];
+    if (!noteId) {
+      console.log('No note ID found in URL:', fullUrl);
+      return null;
+    }
+    const apiUrl = `https://www.xiaohongshu.com/api/sns/v1/note/${noteId}`;
+    console.log('Fetching from API:', apiUrl);
+    const response = await axios.get(apiUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 XiaoHongShu/8.0.0',
+        'Referer': 'https://www.xiaohongshu.com',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      timeout: 5000
+    });
+    const data = response.data;
+    if (!data?.data?.note) {
+      console.log('No note data in API response');
+      return null;
+    }
+    const mediaLinks = { images: [], videos: [] };
+    if (data.data.note.images_list) {
+      mediaLinks.images = data.data.note.images_list.map(img => img.url);
+    }
+    if (data.data.note.video?.url) {
+      mediaLinks.videos = [data.data.note.video.url];
+    }
+    return mediaLinks.images.length || mediaLinks.videos.length ? mediaLinks : null;
+  } catch (error) {
+    console.error('API fetch error:', error.message);
+    return null;
   }
 }
 
