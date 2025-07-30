@@ -11,10 +11,9 @@ const kv = createClient({
   token: process.env.KV_REST_API_TOKEN
 });
 
-let PQueue; // 延迟初始化 PQueue
-let queue; // 延迟初始化 queue
+let PQueue;
+let queue;
 
-// 初始化 PQueue
 async function initQueue() {
   if (!PQueue) {
     const { default: PQueueModule } = await import('p-queue');
@@ -45,7 +44,7 @@ app.get('/parse_xiaohongshu', async (req, res) => {
   }
 
   try {
-    await initQueue(); // 确保 queue 已初始化
+    await initQueue();
     console.log('Resolving short URL:', url);
     const fullUrl = await resolveShortUrl(url);
     if (!fullUrl.includes('xiaohongshu.com')) {
@@ -59,7 +58,7 @@ app.get('/parse_xiaohongshu', async (req, res) => {
     
     try {
       console.log('Saving to cache:', cacheKey);
-      await kv.set(cacheKey, result, { ex: 3600 }); // 缓存 1 小时
+      await kv.set(cacheKey, result, { ex: 3600 });
     } catch (error) {
       console.error('KV save error:', error.message);
     }
@@ -76,9 +75,10 @@ async function resolveShortUrl(shortUrl) {
     const response = await axios.get(shortUrl, {
       maxRedirects: 5,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 XiaoHongShu/8.0.0',
+        'Referer': 'https://www.xiaohongshu.com'
       },
-      timeout: 5000 // 5 秒超时
+      timeout: 5000
     });
     return response.request.res.responseUrl;
   } catch (error) {
@@ -92,17 +92,17 @@ async function scrapeMedia(fullUrl) {
     console.log('Connecting to Browserless');
     browser = await puppeteer.connect({
       browserWSEndpoint: `wss://chrome.browserless.io?token=${process.env.BROWSERLESS_TOKEN}`,
-      connectTimeout: 10000 // 10 秒连接超时
+      connectTimeout: 10000
     });
     console.log('Browser connected');
 
     const page = await browser.newPage();
-    const userAgents = [
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Safari/605.1.15'
-    ];
-    const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
-    await page.setExtraHTTPHeaders({ 'User-Agent': randomUA });
+    const appUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 XiaoHongShu/8.0.0';
+    await page.setExtraHTTPHeaders({
+      'User-Agent': appUA,
+      'Referer': 'https://www.xiaohongshu.com',
+      'X-Requested-With': 'XMLHttpRequest'
+    });
 
     await page.setRequestInterception(true);
     page.on('request', request => {
@@ -114,7 +114,7 @@ async function scrapeMedia(fullUrl) {
     });
 
     console.log('Navigating to:', fullUrl);
-    await page.goto(fullUrl, { waitUntil: 'networkidle0', timeout: 15000 });
+    await gotoWithRetry(page, fullUrl);
 
     const mediaLinks = { images: [], videos: [] };
     const images = await page.$$eval('img', imgs =>
@@ -128,11 +128,14 @@ async function scrapeMedia(fullUrl) {
     mediaLinks.videos = videos;
 
     page.on('response', async response => {
-      if (response.url().includes('api') && response.url().includes('json')) {
+      if (response.url().includes('/api/sns/v1/note')) {
         try {
           const data = await response.json();
-          if (data?.video?.url) {
-            mediaLinks.videos.push(data.video.url);
+          if (data?.data?.note?.images_list) {
+            mediaLinks.images.push(...data.data.note.images_list.map(img => img.url));
+          }
+          if (data?.data?.note?.video?.url) {
+            mediaLinks.videos.push(data.data.note.video.url);
           }
         } catch {}
       }
@@ -146,6 +149,19 @@ async function scrapeMedia(fullUrl) {
     if (browser) {
       console.log('Closing browser');
       await browser.close();
+    }
+  }
+}
+
+async function gotoWithRetry(page, url) {
+  for (let i = 0; i < 3; i++) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      return;
+    } catch (error) {
+      console.error(`Navigation attempt ${i + 1} failed: ${error.message}`);
+      if (i === 2) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
 }
